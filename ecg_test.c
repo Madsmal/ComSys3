@@ -1,7 +1,7 @@
-/*
- * simsec_test.c
+	/*
+ * ecg_test.c
  *
- * Test of simple simsec protocol 
+ * Simple test of ECG protocol
  * Parameters:
  *   -r     Runs as receiver (default)
  *   -s     Runs as sender 
@@ -11,18 +11,19 @@
 
 
 // Uses
-#include "simsec.h"
+#include "ecg.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-#define TIMEOUT_SEC        5
-#define BUF_SIZE          60
-
+#define SEND_TIMEOUT_SEC        5
+#define RECV_TIMEOUT_SEC       10
+#define SEND_BUF_SIZE        1024
+#define RECV_BUF_SIZE         256
 
 int is_sender = 0;
 int snd_addr = 2132;
-int rcv_addr = 1799;
+int rcv_addr = 2135;
 
 void read_args(int argc, char * argv[]) {
     int i;
@@ -45,11 +46,11 @@ void read_args(int argc, char * argv[]) {
 int sender() {
     int err, last;
 
-    char msg[BUF_SIZE];
+    char msg[SEND_BUF_SIZE];
 
     printf("Acting as sender with address %d sending to %d\n", snd_addr, rcv_addr);
 
-    if ( (err=simsec_init(snd_addr)) != ERR_OK) {
+    if ( (err=ecg_init(snd_addr)) != ERR_OK) {
         printf("Protocol could not be initialized: %d\n", err);
         return 1;
     }
@@ -60,16 +61,16 @@ int sender() {
 
         // Get next message from console
         printf("Enter message: ");
-        fgets(msg, BUF_SIZE, stdin);
+        fgets(msg, SEND_BUF_SIZE, stdin);
         last = strlen(msg) - 1;
         if (msg[last] == '\n') { msg[last] = '\0'; }  // Drop ending newline
 
-        // Send it securely
-        err = simsec_send(rcv_addr, msg, TIMEOUT_SEC * 1000);
+        // Send it reliably
+        err = ecg_send(rcv_addr, msg, strlen(msg), SEND_TIMEOUT_SEC * 1000);
 
         if (err != ERR_OK && err != ERR_TIMEOUT) {
-            printf("simsec_send failed with %d\n", err);
-            return 1;
+            printf("ecg_send failed with %d\n", err);
+            continue;
         }
 
         if (err == ERR_TIMEOUT) {
@@ -77,7 +78,7 @@ int sender() {
             continue;
         }
 
-        printf("Securely sent: %s\n", msg);
+        printf("Reliably sent: %s\n", msg);
     }
 
     return 0;
@@ -85,18 +86,33 @@ int sender() {
 
 
 int receiver() {
-    int err;
+    int err, len, source;
+
+    char buf[RECV_BUF_SIZE];
 
     printf("Acting as receiver with address %d\n", rcv_addr);
 
-    if ( (err=simsec_init(rcv_addr)) != ERR_OK) {
+    if ( (err=ecg_init(rcv_addr)) != ERR_OK) {
         printf("Protocol could not be initialized: %d\n", err);
         return 1;
     }
 
     printf("Protocol init initialized\n");
 
-    simsec_receive_loop();
+    while (1) {
+
+        if ( (len=ecg_recv(&source, buf, sizeof(buf), RECV_TIMEOUT_SEC * 100)) < 0) {
+            if (len == ERR_TIMEOUT) {
+                printf("ecg_recv timed out\n");
+                continue;
+            }
+            printf("ecg_recv failed with %d\n", len);
+            continue;
+        }
+
+        buf[len] = '\0';
+        printf("Received %d bytes from address %d: %s\n", len, source, buf);
+    }
 
     printf("Receive loop ended!\n");
     return 1;
@@ -111,4 +127,3 @@ int main(int argc, char * argv[]) {
     return is_sender ? sender() :  receiver();
 
 }
-

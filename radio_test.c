@@ -20,8 +20,8 @@
 #define BUF_SIZE          60
 
 int is_sender = 0;
-int snd_addr = 2132;
-int rcv_addr = 2135;
+int snd_addr = 2135;
+int rcv_addr = 1799;
 
 /* For larger number of options, use a library, e.g. gopt */
 void read_args(int argc, char * argv[]) {
@@ -102,7 +102,7 @@ int receiver() {
         if (len  < 0) {
             if (len == ERR_TIMEOUT) {
 
-            	 printf("radio_recv timed out\n");
+            	 printf("radio_recv timed out my nigga\n");
                 continue;
             }
             printf("radio_recv failed with %d\n", len);
