@@ -69,10 +69,13 @@ int radio_send(int  dst, char* data, int len) {
 
     // Send the message
     int result;
+
+        // This part fucks up
+
         if ((result = sendto(dst, data,len , 0 , (struct sockaddr *) &sa,
          sizeof(sa)))==-1)
         {
-
+            
             return ERR_FAILED;
 
         } 
@@ -80,6 +83,7 @@ int radio_send(int  dst, char* data, int len) {
          
          // Check if fully sent
         if (result != len) {
+            
             return ERR_FAILED;
         }
     return ERR_OK;

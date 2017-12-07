@@ -1,7 +1,7 @@
 /*
  * ecg.c
  *
- * Emulation of radio node using UDP (skeleton)
+ * 
  */
 
 // Implements
@@ -14,9 +14,12 @@
 #include <string.h>
 
 
-#define port 2500
+#define timeout 200
 #define BUFLEN 4096
-
+#define DATA 0
+#define ACK  1
+#define REQ 2
+#define TERMINATION 3
 
 int sock;    // UDP Socket used by this node
 
@@ -25,134 +28,166 @@ typedef struct { char tag ; } tag_t ;
 
 typedef struct { 
     tag_t type;
-    int seal;
-    int length;
-    int termination;
-    char data[];
+    //int nr;
+    char str[0];
  } data_pdu_t;
 
  typedef struct { 
     tag_t type;
-    int seal;
+    //int nr;
+ } termination_pdu_t;
+
+ typedef struct { 
+    tag_t type;
+    int nrPackage;
  } req_pdu_t;
 
  typedef struct { 
     tag_t type;
-    int seal;
  } ack_pdu_t;
 
+ typedef union {
+    char raw[FRAME_PAYLOAD_SIZE];
 
-int radio_init(int addr) {
+    tag_t        pdu_type;
+    data_pdu_t   data;
+    ack_pdu_t    ack;
+    req_pdu_t    req;
+    termination_pdu_t termination;
+} pdu_frame_t;
 
-    struct sockaddr_in sa;   // Structure to set own address
+#define DATA_PAYLOAD_SIZE (FRAME_PAYLOAD_SIZE - sizeof(data_pdu_t));
 
-    // Check validity of address
-    if (addr<1024 |addr >65535){
-        return ERR_INVAL;
-    }
+int ecg_init(int addr) {
 
-    // Create UDP socket
-      if ((sock=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
-    {
-        return ERR_INVAL;
-    }
-    // Prepare address structure
-    memset((char *) &sa, 0, sizeof(sa));
-     
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(addr);
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
-    // Bind socket to port
-    if( bind(sock , (struct sockaddr*)&sa, sizeof(sa) ) == -1)
-    {
-        return ERR_INVAL;
-    }
-    return ERR_OK;
+    return radio_init(addr);
 }
 
-int radio_send(int  dst, char* data, int len) {
+int ecg_send(int  dst, char* data, int len) {
 
     struct sockaddr_in sa;   // Structure to hold destination address
+    totNr = len/DATA_PAYLOAD_SIZE;
+    pdu_frame_t buf;
     
 
+    int src, err;
+   
+    int done = 0;
     // Check that port and len are valid
     if (dst<1024 |dst >65535){
         return ERR_INVAL;
     }
     
-    // Emulate transmission time
-    usleep((len*1000)/2400);
-    // Prepare address structure
-    memset((char *) &sa, 0, sizeof(sa));
-     
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(dst);
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (data>4096){
+        return ERR_INVAL;
+    }
 
-    // Send the message
-    int result;
-        if ((result = sendto(dst, data,len , 0 , (struct sockaddr *) &sa,
-         sizeof(sa)))==-1)
-        {
 
+    
+    int sentNow = 0;
+
+    buf.req.type.tag = REQ;
+    buf.req.nrPackage = totNr;
+    int ack1;
+    if ((err = radio_send(dst, buf, sizeof(buf))) != ERR_OK){
+        printf("Req send failed with %d\n", err);
+        return ERR_FAILED;
+    }
+    buf.ack.type.tag = ACK;
+    ack1 = radio_recv(&sa, buf.raw, timeout);
+    
+    while(ack1>=ERR_OK) //add alarm later.
+    {   
+         buf.data.type.tag = DATA;
+       
+        if (ack1 != sizeof(ack_pdu_t) || buf.pdu_type.tag != ACK) {
+                    // Not an ACK packet -- ignore
+                    printf("Non-ACK packcet with length %d received\n", err);
+                    continue;
+                }
+
+                // Check sender
+                if (src != dst) {
+                    printf("Wrong sender: %d\n", src);
+                    continue;
+                };
+
+                // Check fingerprint
+                if (buf.ack.seal != fingerprint(msg, KEY2)) {
+                    printf("Wrong fingerprint: 0x%08x\n", buf.ack.seal);
+                    continue;
+                };
+        strcpy(buf.data.str, data[(sentNow*DATA_PAYLOAD_SIZE)
+                :((sentNow*DATA_PAYLOAD_SIZE)+DATA_PAYLOAD_SIZE)];
+
+        if ( (err=radio_send(dst, buf.raw, len)) != ERR_OK) {
+            printf("radio_send failed with %d\n", err);
             return ERR_FAILED;
+            }
 
-        } 
-        
-         
-         // Check if fully sent
-        if (result != len) {
+        ack1 = radio_recv(&sa, buf.raw, time_left);
+        sentNow = sentNow++;
+
+    }
+    if (sentNow == totNr){
+        buf.termination.type.tag = TERMINATION;
+        if ( (err=radio_send(dst, buf.raw, len)) != ERR_OK) {
+            printf("radio_send failed with %d\n", err);
             return ERR_FAILED;
-        }
+            }
+    }
+
     return ERR_OK;
 }
 
-int radio_recv(int* src, char* data, int to_ms) {
+int ecg_recv( int * src , char * packet , int len , int to_ms) {
 
 
     struct sockaddr_in sa;   // Structure to receive source address
-
-    int len = -1;      // Size of received packet (or error code)
-
-    struct pollfd pfd; 
-
-    pfd.fd = src;
-    pfd.events = POLLIN;
-
-    int rv = poll(&pfd,1,to_ms);
-
-    if (rv == 0){
-        printf("timeout");
-        return ERR_TIMEOUT;
-    } else if (rv == -1){
-        printf("timeout error");
-        return ERR_FAILED;
-    } 
-    // First poll/select with timeout (may be skipped at first)
+    pdu_frame_t buf;
+    int  err;
     
-    // Then get the packet
 
-    // Zero out the address structure
-
-    // Receive data
     
-        if ((len = recvfrom(src, data, FRAME_PAYLOAD_SIZE , 0 , (struct sockaddr *) &sa,
-         sizeof(sa)))==-1)
-        {
-            printf("failed reeive, length = %d", len);
-            return ERR_FAILED;
 
-        } 
+        /* READY STATE */
+
+        while (1) {
+
+            err=radio_recv(&src, buf.raw, -1);
+            if (err!=ERR_OK) {
+                return ERR_FAILED;
+            }
+                // Somehting received -- check if REQ.
+                if (buf.pdu_type.tag = REQ)) {
+                    // Not a DATA or REQ packet -- ignore
+                    printf("REQ packcet with length %d received\n", err);
+                    break;
+                }
+
+                // DATA PDU ok
+                
+            }
+        }
         
-         
-         
-        if ( 0 > len  ) {
+
+        /* ACKNOWLEDGE STATE */
+
+        // Prepare frame seen as ACK PDU
+        buf.ack.type.tag = ACK;
+        
+
+        // Send acknowledgement to sender
+        if ( (err=radio_send(src, buf.raw, sizeof(ack_pdu_t))) != ERR_OK) {
+            printf("radio_send failed with %d\n", err);
             return ERR_FAILED;
         }
-    // Set source from address structure
-     *src = ntohs(sa.sin_port);
 
-    return len;
+        /* DONE STATE */
+
+        printf("Received message from %d: %s\n", src, msg);
+
+    }
+    
 }
-
 
