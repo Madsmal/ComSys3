@@ -22,8 +22,8 @@
 #define RECV_BUF_SIZE         256
 
 int is_sender = 1;
-int snd_addr = 1025;
-int rcv_addr = 1026;
+int snd_addr = 1111;
+int rcv_addr = 1222;
 
 void read_args(int argc, char * argv[]) {
     int i;
