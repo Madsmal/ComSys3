@@ -34,7 +34,7 @@ typedef struct { char tag ; } tag_t ;
 typedef struct { 
     tag_t type;
     //int nr;
-    char str[0];
+    char str[64];
  } data_pdu_t;
 
  typedef struct { 
@@ -44,7 +44,7 @@ typedef struct {
 
  typedef struct { 
     tag_t type;
-    int nrPackage;
+    int totalLen;
  } req_pdu_t;
 
  typedef struct { 
@@ -52,7 +52,7 @@ typedef struct {
  } ack_pdu_t;
 
  typedef union {
-    char raw[FRAME_PAYLOAD_SIZE];
+    char raw[72];
 
     tag_t        pdu_type;
     data_pdu_t   data;
@@ -61,7 +61,7 @@ typedef struct {
     termination_pdu_t termination;
 } pdu_frame_t;
 
-#define DATA_PAYLOAD_SIZE (FRAME_PAYLOAD_SIZE - sizeof(data_pdu_t));
+#define DATA_PAYLOAD_SIZE 64
  
     
 int ecg_init(int addr) {
@@ -72,14 +72,16 @@ int ecg_init(int addr) {
 int ecg_send(int  dst, char* packet, int len, int to_ms) {
 
     struct sockaddr_in sa;   // Structure to hold destination address
-    int totNr = len/DATA_PAYLOAD_SIZE;
+    
     pdu_frame_t buf;
     alarm_t timer1;
-    int src, time_left;
 
+    int src, time_left;
     alarm_init(&timer1);    
-   
+    int err;
+    int ack1 = 1;
     int done = 0;
+
     // Check that port and len are valid
     if ((dst<1024)|(dst >65535)){
         return ERR_INVAL;
@@ -93,23 +95,27 @@ int ecg_send(int  dst, char* packet, int len, int to_ms) {
     alarm_set(&timer1, to_ms);
     
     int sentNow = 0;
+    int temp = 0;
 
+    while (temp != 1) {
     buf.req.type.tag = REQ;
-    buf.req.nrPackage = totNr;
-    int err;
-    int ack1;
-    if ((err = radio_send(dst, buf.raw, sizeof(buf))) != ERR_OK){
-        printf("Req send failed with %d\n", err);
-        return ERR_FAILED;
-    }
-    buf.ack.type.tag = ACK;
-    ack1 = radio_recv(&src, buf.raw, alarm_rem(&timer1));
+    buf.req.totalLen = len;
     
-    while(ack1>=ERR_OK && !alarm_expired(&timer1)) 
+    
+    
+    if ((err = radio_send(dst, buf.raw, (sizeof(req_pdu_t)))) == ERR_OK){
+        //printf("Req send failed with %d %d %d %d \n " ,dst, err, buf.raw, (sizeof(req_pdu_t)+1));
+        //return ERR_FAILED;
+        temp = 1;
+    }
+    }
+    // ack1 = radio_recv(&src, buf.raw, alarm_rem(&timer1));
+    
+
+    while(ack1>=ERR_OK && !alarm_expired(&timer1)&& (sentNow>=len)) 
     {   
         time_left = alarm_rem(&timer1);
-        buf.data.type.tag = DATA;
-        if (ack1 != sizeof(ack_pdu_t) || buf.pdu_type.tag != ACK) {
+        if (buf.pdu_type.tag != ACK) {
                     // Not an ACK packet -- ignore
                     printf("Non-ACK packcet with length %d received\n", ack1);
                     continue;
@@ -121,22 +127,34 @@ int ecg_send(int  dst, char* packet, int len, int to_ms) {
                     continue;
                 }
 
+            buf.data.type.tag = DATA;
+            if ( !(sentNow+64) > len){
+                memcpy(buf.data.str, packet[sentNow], 64   ); 
+                sentNow = sentNow+64;
+                continue;
+            } else {
+                memcpy(buf.data.str, packet[sentNow], (len-sentNow));
+                sentNow = len;
+                continue;
+            }
 
-
-            memcpy(buf.raw, &packet[sentNow*sizeof(buf.raw)],sizeof(buf.raw));
-
+            
         if ( (err=radio_send(dst, buf.raw, sizeof(buf.raw))) != ERR_OK) {
             printf("radio_send in ecg_send failed with %d\n", err);
             return ERR_FAILED;
             }
-
+        
         ack1 = radio_recv(&src, buf.raw, time_left);
-        sentNow = sentNow++;
+        
 
     }
-    if (sentNow == totNr){
-        buf.termination.type.tag = TERMINATION;
-        if ( (err=radio_send(dst, buf.raw, sizeof(buf.raw))) != ERR_OK) {
+    if (alarm_expired(&timer1)){
+        return ERR_TIMEOUT;
+    }
+    if (sentNow == len){
+            buf.termination.type.tag = TERMINATION;
+            if ( (err=radio_send(dst, buf.raw, sizeof(buf.raw))) != ERR_OK) 
+            {
             printf("radio_send in ecg_send failed with %d\n", err);
             return ERR_FAILED;
             }
@@ -152,48 +170,66 @@ int ecg_recv( int * src , char * packet , int len , int to_ms) {
     alarm_t timer2;
     alarm_init(&timer2);
     alarm_set(&timer2,to_ms) ; 
-    int reqReceiv = 0;
-    int msg[72];
+    int reqReceiv = 1;
+    
         /* READY STATE */
     int msgReceived = 0;
-    int totNr;
-    
-        while (1) {
-
-            err=radio_recv(&src, buf.raw, alarm_rem(&timer2));
+    int totLen = 4096;
+    char msg[4096];
+    int temp1 = 1;
+    while(temp1){
+    err=radio_recv(src, buf.raw, -1);
 
                 // Somehting received -- check if REQ.
-            if ((buf.req.type.tag = REQ)&& err == ERR_OK) {
+            if ((buf.req.type.tag == REQ)) {
                     reqReceiv = 1;
-                    totNr = buf.req.nrPackage;
-                    printf("REQ packet with length %d received\n", err);
-                    break;
+                    if (buf.req.totalLen >4066){
+                        return ERR_INVAL;
+                    }
+                    printf("REQ packet with length %d received and total packet length %d\n", err, buf.req.totalLen);
+                    totLen = buf.req.totalLen;
+                    
+                    
             }
+            char msg[totLen];
             if (err == -3){
                 return ERR_TIMEOUT;
             }
-            
-                
-            }
+
             buf.ack.type.tag = ACK;
-             if ( (err=radio_send(&src, buf.raw, sizeof(ack_pdu_t))) != ERR_OK) {
-            printf("radio_send failed with %d\n", err);
-            return ERR_FAILED;
+
+             if ( (err=radio_send(src, buf.raw, sizeof(buf.raw))) != ERR_OK) {
+                printf("radio_send failed to send ack with %d\n", err);
+                return ERR_FAILED;
             }
-        
-        while((reqReceiv == 1) && (msgReceived<totNr)){
-            err=radio_recv(&src, buf.raw, alarm_rem(&timer2));
-            if (err!=ERR_OK){ return ERR_FAILED;}
-            if (buf.data.type.tag == DATA){
-                printf("Received message from %d: %s\n", src,buf.raw );
-                msgReceived++;
+            printf("Her \n");
+            temp1 = 0;
+        }
+        temp1 = 1;
+        while   ((reqReceiv == 1) && (msgReceived<totLen)){
+                        printf("Her2 \n");
+
+                err=radio_recv(&src, buf.raw, alarm_rem(&timer2));
+            
+            if (buf.pdu_type.tag == DATA){
+                memcpy(msg[msgReceived], buf.data.str ,sizeof(buf.raw));
+                msgReceived= msgReceived+sizeof(buf.raw);
             }
              if (alarm_expired(&timer2)){
                 return ERR_TIMEOUT;
             }
-            if(msgReceived == totNr){
-                reqReceiv = 0;
+            if (buf.pdu_type.tag == TERMINATION){
+                printf("Received message from %d: %s\n", src, msgReceived);
             }
+            buf.ack.type.tag = ACK;
+           
+
+             // Send acknowledgement to sender
+             if ((err=radio_send(src, buf.raw, sizeof(ack_pdu_t))) != ERR_OK) {
+                 printf("radio_send failed with %d\n", err);
+                return ERR_FAILED;
+        }
+
         }
 
         /* ACKNOWLEDGE STATE */
@@ -209,6 +245,6 @@ int ecg_recv( int * src , char * packet , int len , int to_ms) {
         //}
 
         /* DONE STATE */
-
+        return msgReceived;
 }
    

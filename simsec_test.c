@@ -21,7 +21,7 @@
 
 
 int is_sender = 0;
-int snd_addr = 2132;
+int snd_addr = 1483;
 int rcv_addr = 1799;
 
 void read_args(int argc, char * argv[]) {
